@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from typing import List
 import jwt
@@ -8,9 +9,14 @@ import uuid
 import time
 import os
 import yaml
+import datetime
 from dotenv import dotenv_values
 
 app = FastAPI()
+
+STARTUP_TIME = time.time()
+http_requests_total = 0
+request_logs = []
 
 # ============================================================
 # Assignment 1 Configuration
@@ -82,14 +88,26 @@ def cast_value(key, value):
 
 @app.middleware("http")
 async def add_headers(request: Request, call_next):
+    global http_requests_total
+    http_requests_total += 1
+
     start = time.perf_counter()
 
     response = await call_next(request)
 
     process_time = time.perf_counter() - start
 
-    response.headers["X-Request-ID"] = str(uuid.uuid4())
+    request_id = str(uuid.uuid4())
+    response.headers["X-Request-ID"] = request_id
     response.headers["X-Process-Time"] = str(process_time)
+    
+    log_entry = {
+        "level": "info",
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "path": request.url.path,
+        "request_id": request_id
+    }
+    request_logs.append(log_entry)
 
     return response
 
@@ -277,3 +295,27 @@ def analytics(request: AnalyticsRequest, x_api_key: str = Header(None)):
         "revenue": revenue,
         "top_user": top_user
     }
+
+
+# ============================================================
+# Assignment 6: Observability
+# ============================================================
+
+@app.get("/work")
+def work(n: int):
+    # Do K units of work, return email and n
+    return {"email": EMAIL, "done": n}
+
+@app.get("/metrics")
+def metrics():
+    content = f"# HELP http_requests_total Total number of HTTP requests\n# TYPE http_requests_total counter\nhttp_requests_total {http_requests_total}\n"
+    return PlainTextResponse(content=content)
+
+@app.get("/healthz")
+def healthz():
+    uptime_s = time.time() - STARTUP_TIME
+    return {"status": "ok", "uptime_s": uptime_s}
+
+@app.get("/logs/tail")
+def logs_tail(limit: int = 10):
+    return request_logs[-limit:]
