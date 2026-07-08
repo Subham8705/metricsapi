@@ -1,6 +1,7 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import List
 import jwt
 from jwt import InvalidTokenError
 import uuid
@@ -22,6 +23,7 @@ EMAIL = "24f2000610@ds.study.iitm.ac.in"
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "*",
         "https://dash-ck249g.example.com",
         "https://exam.sanand.workers.dev",
         "https://exam.sanand.workers.dev/"
@@ -238,3 +240,41 @@ def effective_config(request: Request):
     
     allowed_keys = ["port", "workers", "debug", "log_level", "api_key"]
     return {k: config[k] for k in allowed_keys if k in config}
+
+
+# ============================================================
+# Analytics Endpoint
+# ============================================================
+
+class Event(BaseModel):
+    user: str
+    amount: float
+    ts: int
+
+class AnalyticsRequest(BaseModel):
+    events: List[Event]
+
+@app.post("/analytics")
+def analytics(request: AnalyticsRequest, x_api_key: str = Header(None)):
+    if x_api_key != "ak_rni7hj0lv3qn8jhl781wjxon":
+        raise HTTPException(status_code=401, detail="Missing or invalid API key")
+    
+    events = request.events
+    total_events = len(events)
+    unique_users = len(set(e.user for e in events))
+    revenue = sum(e.amount for e in events if e.amount > 0)
+    
+    user_revenues = {}
+    for e in events:
+        if e.amount > 0:
+            user_revenues[e.user] = user_revenues.get(e.user, 0) + e.amount
+            
+    top_user = max(user_revenues, key=user_revenues.get) if user_revenues else ""
+    
+    return {
+        "email": EMAIL,
+        "total_events": total_events,
+        "unique_users": unique_users,
+        "revenue": revenue,
+        "top_user": top_user
+    }
