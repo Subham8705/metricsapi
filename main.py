@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException, Header
+from fastapi import FastAPI, Request, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
@@ -320,61 +320,85 @@ def healthz():
 def logs_tail(limit: int = 10):
     return request_logs[-limit:]
 
+
 # ============================================================
-# Assignment 8: Local LLM Structured-Output Service
+# API Engineering Patterns (Orders API)
 # ============================================================
 
-import urllib.request
-import json
+import base64
 
-class ExtractRequest(BaseModel):
-    text: str
+# --- 1. Rate Limiting ---
+client_requests = {}
+RATE_LIMIT_R = 17
+RATE_LIMIT_WINDOW = 10.0
 
-class InvoiceExtraction(BaseModel):
-    vendor: str
-    amount: float
-    currency: str
-    date: str
-
-@app.post("/extract")
-def extract_invoice(req: ExtractRequest):
-    prompt = f"""
-Extract the following details from the invoice text. 
-Return a valid JSON object with exactly these fields:
-- "vendor": the vendor name as a string.
-- "amount": the total due as a number (float or int). Do not include currency symbols or text.
-- "currency": the 3-letter uppercase currency code (e.g. USD).
-- "date": the payment due date as YYYY-MM-DD.
-
-If there is no valid text, just make best effort.
-Invoice text:
-{req.text}
-"""
+def rate_limit(x_client_id: str = Header(None)):
+    client_id = x_client_id or "anonymous"
+    now = time.time()
     
-    data = {
-        "model": "llama3.2:3b",
-        "prompt": prompt,
-        "format": "json",
-        "stream": False,
-        "options": {
-            "temperature": 0.0
-        }
-    }
+    if client_id not in client_requests:
+        client_requests[client_id] = []
+        
+    timestamps = client_requests[client_id]
+    timestamps = [ts for ts in timestamps if now - ts < RATE_LIMIT_WINDOW]
     
-    req_obj = urllib.request.Request(
-        "http://localhost:11434/api/generate",
-        data=json.dumps(data).encode("utf-8"),
-        headers={"Content-Type": "application/json"}
-    )
-    
+    if len(timestamps) >= RATE_LIMIT_R:
+        retry_after = int(RATE_LIMIT_WINDOW - (now - timestamps[0]))
+        if retry_after < 1:
+            retry_after = 1
+        client_requests[client_id] = timestamps
+        raise HTTPException(
+            status_code=429, 
+            detail="Too Many Requests", 
+            headers={"Retry-After": str(retry_after)}
+        )
+        
+    timestamps.append(now)
+    client_requests[client_id] = timestamps
+    return client_id
+
+# --- 2. Cursor Pagination ---
+TOTAL_ORDERS = 60
+catalog = [{"id": i} for i in range(1, TOTAL_ORDERS + 1)]
+
+def encode_cursor(idx: int) -> str:
+    return base64.b64encode(str(idx).encode("utf-8")).decode("utf-8")
+
+def decode_cursor(cursor: str) -> int:
     try:
-        with urllib.request.urlopen(req_obj, timeout=30) as response:
-            result = json.loads(response.read().decode())
-            response_text = result.get("response", "{}")
-            extracted = json.loads(response_text)
-            
-            # Pydantic validation guarantees schema compliance
-            valid_data = InvoiceExtraction(**extracted)
-            return valid_data.dict()
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        return int(base64.b64decode(cursor.encode("utf-8")).decode("utf-8"))
+    except:
+        return 0
+
+@app.get("/orders")
+def get_orders(limit: int = 10, cursor: str = None, client_id: str = Depends(rate_limit)):
+    start_idx = 0
+    if cursor:
+        start_idx = decode_cursor(cursor)
+        
+    items = catalog[start_idx:start_idx + limit]
+    
+    next_idx = start_idx + len(items)
+    next_cursor = None
+    if next_idx < len(catalog):
+        next_cursor = encode_cursor(next_idx)
+        
+    return {
+        "items": items,
+        "next_cursor": next_cursor
+    }
+
+# --- 3. Idempotent POST ---
+idempotent_store = {}
+order_id_counter = 1000
+
+@app.post("/orders", status_code=201)
+def create_order(request: Request, idempotency_key: str = Header(...), client_id: str = Depends(rate_limit)):
+    global order_id_counter
+    if idempotency_key in idempotent_store:
+        return idempotent_store[idempotency_key]
+    
+    order_id_counter += 1
+    order_data = {"id": str(order_id_counter)}
+    idempotent_store[idempotency_key] = order_data
+    return order_data
