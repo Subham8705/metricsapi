@@ -234,7 +234,8 @@ def effective_config(request: Request):
     # Secret masking
     # ------------------------------------------------
 
-    config["api_key"] = "*****"
+    if "api_key" in config:
+        config["api_key"] = "*" * len(str(config["api_key"]))
     
     allowed_keys = ["port", "workers", "debug", "log_level", "api_key"]
     return {k: config[k] for k in allowed_keys if k in config}
