@@ -31,7 +31,8 @@ app.add_middleware(
     allow_origins=[
         "https://dash-ck249g.example.com",
         "https://exam.sanand.workers.dev",
-        "https://exam.sanand.workers.dev/"
+        "https://exam.sanand.workers.dev/",
+        "https://app-suva7g.example.com"
     ],
     allow_credentials=False,
     allow_methods=["*"],
@@ -93,12 +94,15 @@ async def add_headers(request: Request, call_next):
     http_requests_total += 1
 
     start = time.perf_counter()
+    
+    # Context Propagation
+    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    request.state.request_id = request_id
 
     response = await call_next(request)
 
     process_time = time.perf_counter() - start
 
-    request_id = str(uuid.uuid4())
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Process-Time"] = str(process_time)
     
@@ -403,3 +407,44 @@ def create_order(request: Request, idempotency_key: str = Header(...), client_id
     order_data = {"id": str(order_id_counter)}
     idempotent_store[idempotency_key] = order_data
     return order_data
+
+# ============================================================
+# API Engineering Patterns (Ping API)
+# ============================================================
+
+ping_client_requests = {}
+PING_RATE_LIMIT_R = 10
+PING_RATE_LIMIT_WINDOW = 10.0
+
+def ping_rate_limit(x_client_id: str = Header(None)):
+    client_id = x_client_id or "anonymous"
+    now = time.time()
+    
+    if client_id not in ping_client_requests:
+        ping_client_requests[client_id] = []
+        
+    timestamps = ping_client_requests[client_id]
+    timestamps = [ts for ts in timestamps if now - ts < PING_RATE_LIMIT_WINDOW]
+    
+    if len(timestamps) >= PING_RATE_LIMIT_R:
+        retry_after = int(PING_RATE_LIMIT_WINDOW - (now - timestamps[0]))
+        if retry_after < 1:
+            retry_after = 1
+        ping_client_requests[client_id] = timestamps
+        raise HTTPException(
+            status_code=429, 
+            detail="Too Many Requests", 
+            headers={"Retry-After": str(retry_after)}
+        )
+        
+    timestamps.append(now)
+    ping_client_requests[client_id] = timestamps
+    return client_id
+
+@app.get("/ping")
+def get_ping(request: Request, client_id: str = Depends(ping_rate_limit)):
+    request_id = getattr(request.state, "request_id", None)
+    return {
+        "email": EMAIL,
+        "request_id": request_id
+    }
