@@ -17,12 +17,16 @@ app = FastAPI()
 
 EMAIL = "24f2000610@ds.study.iitm.ac.in"
 
-ALLOWED_ORIGIN = "https://dash-ck249g.example.com"
+# ALLOWED_ORIGIN = "https://dash-ck249g.example.com"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[ALLOWED_ORIGIN],
-    allow_credentials=True,
+    allow_origins=[
+        "https://dash-ck249g.example.com",
+        "https://exam.sanand.workers.dev",
+        "https://exam.sanand.workers.dev/"
+    ],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -106,8 +110,19 @@ def root():
 
 @app.get("/stats")
 def stats(values: str):
+    try:
+        nums = [int(x.strip()) for x in values.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid values parameter; expected comma-separated integers"
+        )
 
-    nums = [int(x.strip()) for x in values.split(",")]
+    if not nums:
+        raise HTTPException(
+            status_code=400,
+            detail="Values query parameter cannot be empty"
+        )
 
     return {
         "email": EMAIL,
