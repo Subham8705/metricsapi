@@ -23,7 +23,6 @@ EMAIL = "24f2000610@ds.study.iitm.ac.in"
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "*",
         "https://dash-ck249g.example.com",
         "https://exam.sanand.workers.dev",
         "https://exam.sanand.workers.dev/"
