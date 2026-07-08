@@ -5,6 +5,9 @@ import jwt
 from jwt import InvalidTokenError
 import uuid
 import time
+import os
+import yaml
+from dotenv import load_dotenv
 
 app = FastAPI()
 
@@ -43,6 +46,32 @@ SI6iyrYbKR0NEBSqq4XkadEjsCs4F1RncsS4LlgniT7GlkL9Mce3b0wGLs9/7ZIX
 dQIDAQAB
 -----END PUBLIC KEY-----
 """
+
+
+load_dotenv()
+
+DEFAULTS = {
+    "port": 8000,
+    "workers": 1,
+    "debug": False,
+    "log_level": "info",
+    "api_key": "default-secret-000"
+}
+
+
+def to_bool(v):
+    if isinstance(v, bool):
+        return v
+    return str(v).lower() in ["true", "1", "yes", "on"]
+
+
+def cast_value(key, value):
+    if key in ["port", "workers"]:
+        return int(value)
+    if key == "debug":
+        return to_bool(value)
+    return str(value)
+
 
 # ============================================================
 # Middleware
@@ -125,3 +154,77 @@ def verify(req: TokenRequest):
                 "valid": False
             }
         )
+    
+
+@app.get("/effective-config")
+def effective_config(request: Request):
+
+    config = DEFAULTS.copy()
+
+    # ------------------------------------------------
+    # YAML
+    # ------------------------------------------------
+
+    if os.path.exists("config.development.yaml"):
+        with open("config.development.yaml") as f:
+            y = yaml.safe_load(f)
+
+            if y:
+                config.update(y)
+
+    # ------------------------------------------------
+    # .env
+    # ------------------------------------------------
+
+    if "APP_LOG_LEVEL" in os.environ:
+        config["log_level"] = os.environ["APP_LOG_LEVEL"]
+
+    if "NUM_WORKERS" in os.environ:
+        config["workers"] = int(os.environ["NUM_WORKERS"])
+
+    # ------------------------------------------------
+    # OS ENV
+    # ------------------------------------------------
+
+    for k, v in os.environ.items():
+
+        if not k.startswith("APP_"):
+            continue
+
+        key = k[4:].lower()
+
+        if key == "workers":
+            config["workers"] = int(v)
+
+        elif key == "log_level":
+            config["log_level"] = v
+
+        elif key == "api_key":
+            config["api_key"] = v
+
+        elif key == "port":
+            config["port"] = int(v)
+
+        elif key == "debug":
+            config["debug"] = to_bool(v)
+
+    # ------------------------------------------------
+    # CLI overrides
+    # ------------------------------------------------
+
+    for item in request.query_params.getlist("set"):
+
+        if "=" not in item:
+            continue
+
+        k, v = item.split("=", 1)
+
+        config[k] = cast_value(k, v)
+
+    # ------------------------------------------------
+    # Secret masking
+    # ------------------------------------------------
+
+    config["api_key"] = "*****"
+
+    return config
