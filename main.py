@@ -319,3 +319,62 @@ def healthz():
 @app.get("/logs/tail")
 def logs_tail(limit: int = 10):
     return request_logs[-limit:]
+
+# ============================================================
+# Assignment 8: Local LLM Structured-Output Service
+# ============================================================
+
+import urllib.request
+import json
+
+class ExtractRequest(BaseModel):
+    text: str
+
+class InvoiceExtraction(BaseModel):
+    vendor: str
+    amount: float
+    currency: str
+    date: str
+
+@app.post("/extract")
+def extract_invoice(req: ExtractRequest):
+    prompt = f"""
+Extract the following details from the invoice text. 
+Return a valid JSON object with exactly these fields:
+- "vendor": the vendor name as a string.
+- "amount": the total due as a number (float or int). Do not include currency symbols or text.
+- "currency": the 3-letter uppercase currency code (e.g. USD).
+- "date": the payment due date as YYYY-MM-DD.
+
+If there is no valid text, just make best effort.
+Invoice text:
+{req.text}
+"""
+    
+    data = {
+        "model": "llama3.2:3b",
+        "prompt": prompt,
+        "format": "json",
+        "stream": False,
+        "options": {
+            "temperature": 0.0
+        }
+    }
+    
+    req_obj = urllib.request.Request(
+        "http://localhost:11434/api/generate",
+        data=json.dumps(data).encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
+    
+    try:
+        with urllib.request.urlopen(req_obj, timeout=30) as response:
+            result = json.loads(response.read().decode())
+            response_text = result.get("response", "{}")
+            extracted = json.loads(response_text)
+            
+            # Pydantic validation guarantees schema compliance
+            valid_data = InvoiceExtraction(**extracted)
+            return valid_data.dict()
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
