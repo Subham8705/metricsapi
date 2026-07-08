@@ -7,7 +7,7 @@ import uuid
 import time
 import os
 import yaml
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 app = FastAPI()
 
@@ -51,8 +51,6 @@ dQIDAQAB
 -----END PUBLIC KEY-----
 """
 
-
-load_dotenv()
 
 DEFAULTS = {
     "port": 8000,
@@ -191,11 +189,21 @@ def effective_config(request: Request):
     # .env
     # ------------------------------------------------
 
-    if "APP_LOG_LEVEL" in os.environ:
-        config["log_level"] = os.environ["APP_LOG_LEVEL"]
-
-    if "NUM_WORKERS" in os.environ:
-        config["workers"] = int(os.environ["NUM_WORKERS"])
+    env_values = dotenv_values(".env")
+    env_mapping = {
+        "APP_LOG_LEVEL": "log_level",
+        "NUM_WORKERS": "workers",
+        "APP_PORT": "port",
+        "APP_DEBUG": "debug",
+        "APP_API_KEY": "api_key"
+    }
+    for k, v in env_values.items():
+        if v is None:
+            continue
+            
+        if k in env_mapping:
+            key = env_mapping[k]
+            config[key] = cast_value(key, v)
 
     # ------------------------------------------------
     # OS ENV
@@ -207,21 +215,7 @@ def effective_config(request: Request):
             continue
 
         key = k[4:].lower()
-
-        if key == "workers":
-            config["workers"] = int(v)
-
-        elif key == "log_level":
-            config["log_level"] = v
-
-        elif key == "api_key":
-            config["api_key"] = v
-
-        elif key == "port":
-            config["port"] = int(v)
-
-        elif key == "debug":
-            config["debug"] = to_bool(v)
+        config[key] = cast_value(key, v)
 
     # ------------------------------------------------
     # CLI overrides
@@ -241,5 +235,6 @@ def effective_config(request: Request):
     # ------------------------------------------------
 
     config["api_key"] = "*****"
-
-    return config
+    
+    allowed_keys = ["port", "workers", "debug", "log_level", "api_key"]
+    return {k: config[k] for k in allowed_keys if k in config}
